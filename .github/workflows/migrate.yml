@@ -1,0 +1,46 @@
+name: Run Migrations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'migrations/**'
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Create schema_migrations tracking table
+        run: |
+          psql "$DATABASE_URL" -c "
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+              filename   text        PRIMARY KEY,
+              applied_at timestamptz NOT NULL DEFAULT now()
+            );
+          "
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Run pending migrations
+        run: |
+          for file in $(ls migrations/*.sql | sort); do
+            filename=$(basename "$file")
+            applied=$(psql "$DATABASE_URL" -tAc "SELECT 1 FROM schema_migrations WHERE filename = '$filename'")
+            if [ "$applied" = "1" ]; then
+              echo "Skipping $filename (already applied)"
+            else
+              echo "Applying $filename..."
+              psql "$DATABASE_URL" -f "$file"
+              psql "$DATABASE_URL" -c "INSERT INTO schema_migrations (filename) VALUES ('$filename')"
+              echo "Done: $filename"
+            fi
+          done
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
